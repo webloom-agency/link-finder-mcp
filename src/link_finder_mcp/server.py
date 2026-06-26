@@ -15,6 +15,7 @@ Design goals (matching the sibling Python MCP projects in this GitHub folder):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -27,6 +28,12 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 load_dotenv()
+
+# GET endpoints carry the API key in the query string, and httpx logs the full
+# request URL at INFO level — which would leak the key into hosted logs (Render,
+# etc.). Silence httpx's request logging so the key never appears in plaintext.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # --------------------------------------------------------------------------- #
 # Configuration (everything via environment variables — no secrets in code)
