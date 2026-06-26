@@ -314,6 +314,20 @@ def _num(value: Any) -> float:
         return float("-inf")
 
 
+def _as_rows(value: Any) -> list[dict[str, Any]]:
+    """Normalize a result collection into a list of domain dicts.
+
+    The API documents `results`/`forums`/`expireds` as arrays, but PHP's
+    json_encode turns an associative array into a JSON object (keyed by id or
+    domain). Accept both a list and an object-of-rows.
+    """
+    if isinstance(value, list):
+        return [r for r in value if isinstance(r, dict)]
+    if isinstance(value, dict):
+        return [r for r in value.values() if isinstance(r, dict)]
+    return []
+
+
 def _best_price(row: dict[str, Any]) -> tuple[Any, Any]:
     """Return (best_price, best_price_url) using the row's best_price_platform."""
     platform = row.get("best_price_platform")
@@ -357,13 +371,11 @@ def _shape_results(
     offset = max(0, int(offset))
     order_by = order_by if order_by in SORTABLE_FIELDS else "rd"
 
-    def shape_list(rows: Any) -> tuple[list[Any], int]:
-        if not isinstance(rows, list):
-            return [], 0
+    def shape_list(value: Any) -> tuple[list[Any], int]:
+        rows = _as_rows(value)
         if min_tf is not None:
-            rows = [r for r in rows if isinstance(r, dict) and _num(r.get("tf")) >= min_tf]
-        rows.sort(key=lambda r: _num(r.get(order_by)) if isinstance(r, dict) else float("-inf"),
-                  reverse=True)
+            rows = [r for r in rows if _num(r.get("tf")) >= min_tf]
+        rows.sort(key=lambda r: _num(r.get(order_by)), reverse=True)
         total = len(rows)
         window = rows[offset : offset + limit]
         if not full:
@@ -394,6 +406,18 @@ def _shape_results(
     for key in ("stats", "keywords_used", "search_id", "title"):
         if key in data:
             shaped[key] = data[key]
+    # Diagnostic: if we found no rows anywhere but the payload clearly carried
+    # data, surface the raw top-level shape so the real keys are visible.
+    if results_total == 0 and forums_total == 0 and expireds_total == 0:
+        shaped["_debug"] = {
+            "raw_top_level_keys": list(data.keys()),
+            "results_type": type(data.get("results")).__name__,
+            "results_sample_keys": (
+                list(data["results"].keys())[:5]
+                if isinstance(data.get("results"), dict)
+                else None
+            ),
+        }
     return shaped
 
 
