@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: link-finder-mcp
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m link_finder_mcp.server
+    envVars:
+      - key: PYTHONPATH
+        value: src
+      - key: MCP_TRANSPORT
+        value: sse
+      - key: LINK_FINDER_API_KEY
+        sync: false
+      - key: MCP_BEARER_TOKEN
+        sync: false

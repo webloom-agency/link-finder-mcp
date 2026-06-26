@@ -1,0 +1,26 @@
+# Smithery configuration: https://smithery.ai/docs/config#smitheryyaml
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required:
+      - linkFinderApiKey
+    properties:
+      linkFinderApiKey:
+        type: string
+        description: Link Finder API key (https://app.link-finder.net/account/)
+      dataDir:
+        type: string
+        description: Optional directory to save search results + history.
+        default: data
+  commandFunction: |-
+    (config) => ({
+      command: 'python',
+      args: ['-m', 'link_finder_mcp.server'],
+      env: {
+        PYTHONPATH: 'src',
+        MCP_TRANSPORT: 'stdio',
+        LINK_FINDER_API_KEY: config.linkFinderApiKey,
+        LINK_FINDER_DATA_DIR: config.dataDir || 'data'
+      }
+    })

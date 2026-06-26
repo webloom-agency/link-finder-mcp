@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "link-finder": {
+      "command": "python",
+      "args": ["-m", "link_finder_mcp.server"],
+      "env": {
+        "PYTHONPATH": "/absolute/path/to/link-finder-mcp/src",
+        "MCP_TRANSPORT": "stdio",
+        "LINK_FINDER_API_KEY": "your_link_finder_api_key_here",
+        "LINK_FINDER_DATA_DIR": "/absolute/path/to/link-finder-mcp/data"
+      }
+    }
+  }
+}
