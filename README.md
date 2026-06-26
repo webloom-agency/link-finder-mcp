@@ -2,7 +2,7 @@
 
 An [MCP](https://modelcontextprotocol.io) server for the [Link Finder API](https://app.link-finder.net) — find backlink opportunities, analyze competitors, discover similar domains with AI embeddings, and manage prospecting projects directly from Claude, ChatGPT, Cursor, or any MCP client.
 
-It mirrors the design of the other Python MCP servers in this repo: secrets only via environment variables, host-agnostic, and ready to deploy on Render (or any VM) with a bearer-token-protected HTTP/SSE endpoint.
+Secrets are provided only through environment variables, and the server is host-agnostic: run it locally over stdio, or deploy it anywhere (Render or any VM) with a bearer-token-protected HTTP/SSE endpoint.
 
 ---
 
