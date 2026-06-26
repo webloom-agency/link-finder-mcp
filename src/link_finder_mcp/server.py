@@ -49,6 +49,32 @@ PORT = int(os.getenv("PORT", "8000"))
 DATA_DIR = os.getenv("LINK_FINDER_DATA_DIR", "data").strip()
 HTTP_TIMEOUT = float(os.getenv("LINK_FINDER_HTTP_TIMEOUT", "120"))
 
+# Result shaping defaults. The Link Finder search endpoints return the full
+# result set (no server-side limit), so we bound memory/payload on our side:
+# filter + sort + slice + project to a slim set before returning or saving.
+DEFAULT_LIMIT = 50
+MAX_LIMIT = 500
+SORTABLE_FIELDS = ("rd", "tf", "cf", "dr", "traffic", "backlinks")
+
+# Slim projection: scalar fields needed to assess relevance, authority, and
+# price — instead of the ~131 columns the API returns per domain.
+SLIM_FIELDS = (
+    "domain_id",
+    "domain",
+    "title",
+    "dr",
+    "tf",
+    "cf",
+    "rd",
+    "backlinks",
+    "traffic",
+    "anchors_text",
+    "ttf0",
+    "ai_lang",
+    "gg_news",
+    "best_price_platform",
+)
+
 # Behind a PaaS/proxy (Render, Railway, Fly, ...) the public Host header won't
 # be localhost, which trips FastMCP's DNS-rebinding protection (HTTP 421). The
 # endpoint is already protected by MCP_BEARER_TOKEN, so we disable host
@@ -280,6 +306,97 @@ def _with_saved_path(data: Any, saved_path: Optional[str]) -> Any:
     return data
 
 
+def _num(value: Any) -> float:
+    """Coerce a metric to a float for sorting/filtering; missing -> -inf."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
+def _best_price(row: dict[str, Any]) -> tuple[Any, Any]:
+    """Return (best_price, best_price_url) using the row's best_price_platform."""
+    platform = row.get("best_price_platform")
+    if not platform:
+        return None, None
+    return row.get(platform), row.get(f"{platform}_url")
+
+
+def _slim_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Project a fat (~131-column) domain row down to the essential fields."""
+    if not isinstance(row, dict):
+        return row
+    slim = {k: row.get(k) for k in SLIM_FIELDS if k in row}
+    price, url = _best_price(row)
+    if price is not None:
+        slim["best_price"] = price
+    if url is not None:
+        slim["best_price_url"] = url
+    return slim
+
+
+def _shape_results(
+    data: Any,
+    *,
+    limit: int,
+    offset: int,
+    order_by: str,
+    min_tf: Optional[float],
+    full: bool,
+) -> Any:
+    """Filter, sort, paginate and (by default) slim a search response.
+
+    Bounds both memory and payload: the big parsed result lists are replaced by
+    a small bounded slice, and the original fat structure is dropped so it can
+    be garbage-collected before we serialize the response.
+    """
+    if not isinstance(data, dict) or "error" in data:
+        return data
+
+    limit = max(1, min(int(limit), MAX_LIMIT))
+    offset = max(0, int(offset))
+    order_by = order_by if order_by in SORTABLE_FIELDS else "rd"
+
+    def shape_list(rows: Any) -> tuple[list[Any], int]:
+        if not isinstance(rows, list):
+            return [], 0
+        if min_tf is not None:
+            rows = [r for r in rows if isinstance(r, dict) and _num(r.get("tf")) >= min_tf]
+        rows.sort(key=lambda r: _num(r.get(order_by)) if isinstance(r, dict) else float("-inf"),
+                  reverse=True)
+        total = len(rows)
+        window = rows[offset : offset + limit]
+        if not full:
+            window = [_slim_row(r) for r in window]
+        return window, total
+
+    results, results_total = shape_list(data.get("results"))
+    forums, forums_total = shape_list(data.get("forums"))
+    expireds, expireds_total = shape_list(data.get("expireds"))
+
+    shaped: dict[str, Any] = {
+        "results": results,
+        "forums": forums,
+        "expireds": expireds,
+        "pagination": {
+            "order_by": order_by,
+            "limit": limit,
+            "offset": offset,
+            "min_tf": min_tf,
+            "slim": not full,
+            "results_total": results_total,
+            "results_returned": len(results),
+            "forums_total": forums_total,
+            "expireds_total": expireds_total,
+        },
+    }
+    # Pass through useful scalar metadata without the fat lists.
+    for key in ("stats", "keywords_used", "search_id", "title"):
+        if key in data:
+            shaped[key] = data[key]
+    return shaped
+
+
 # ===========================================================================
 # UTILITIES
 # ===========================================================================
@@ -322,6 +439,11 @@ async def keyword_search(
     keyword: Optional[str] = None,
     keywords: Optional[str] = None,
     search_engine: str = "google",
+    limit: int = DEFAULT_LIMIT,
+    offset: int = 0,
+    order_by: str = "rd",
+    min_tf: Optional[float] = None,
+    full: bool = False,
 ) -> Any:
     """Find backlink opportunities from keywords (SERP analysis).
 
@@ -329,11 +451,20 @@ async def keyword_search(
     when results are found. This is the best entry point to discover relevant
     sites in a niche.
 
+    Results are sorted, bounded and slimmed before being returned (and saved)
+    to keep memory/payload small — the API returns every match in one blob, so
+    `limit`/`offset` paginate over that blob on this server's side.
+
     Args:
         language: Location ID from `list_locations` (e.g. 2250 France, 2840 US).
         keyword: A single keyword. Use this OR `keywords`.
         keywords: Multiple keywords separated by ";" (e.g. "best vpn;vpn free").
         search_engine: "google" (default) or "bing".
+        limit: Max domains to return (default 50, hard cap 500).
+        offset: Skip this many domains (for pagination).
+        order_by: Sort field, descending: rd, tf, cf, dr, traffic, backlinks.
+        min_tf: Keep only domains with Trust Flow >= this value.
+        full: Return all ~131 columns per domain instead of the slim projection.
     """
     if not keyword and not keywords:
         return {"error": "Provide either `keyword` or `keywords`."}
@@ -344,23 +475,47 @@ async def keyword_search(
         "search_engine": search_engine,
     }
     data = await _lf_request("POST", "kwSearch.php", data=params)
-    saved = _save_search("kwSearch", {k: v for k, v in params.items() if v is not None}, data)
-    return _with_saved_path(data, saved)
+    shaped = _shape_results(
+        data, limit=limit, offset=offset, order_by=order_by, min_tf=min_tf, full=full
+    )
+    del data
+    saved = _save_search("kwSearch", {k: v for k, v in params.items() if v is not None}, shaped)
+    return _with_saved_path(shaped, saved)
 
 
 @mcp.tool()
-async def competitor_analysis(competitor: str) -> Any:
+async def competitor_analysis(
+    competitor: str,
+    limit: int = DEFAULT_LIMIT,
+    offset: int = 0,
+    order_by: str = "rd",
+    min_tf: Optional[float] = None,
+    full: bool = False,
+) -> Any:
     """Analyze a competitor's referring domains available on netlinking platforms.
 
     Costs 1 `analyse_concurentielle` credit per request (only if results found).
 
+    Big competitors can return hundreds of referring domains (~hundreds of KB).
+    The API has no server-side limit, so results are sorted, bounded and slimmed
+    here before being returned (and saved) to keep memory/payload small.
+
     Args:
         competitor: Competitor domain, e.g. "competitor.com".
+        limit: Max domains to return (default 50, hard cap 500).
+        offset: Skip this many domains (for pagination).
+        order_by: Sort field, descending: rd, tf, cf, dr, traffic, backlinks.
+        min_tf: Keep only domains with Trust Flow >= this value.
+        full: Return all ~131 columns per domain instead of the slim projection.
     """
     params = {"competitor": competitor}
     data = await _lf_request("POST", "competitor.php", data=params)
-    saved = _save_search("competitor", params, data)
-    return _with_saved_path(data, saved)
+    shaped = _shape_results(
+        data, limit=limit, offset=offset, order_by=order_by, min_tf=min_tf, full=full
+    )
+    del data
+    saved = _save_search("competitor", params, shaped)
+    return _with_saved_path(shaped, saved)
 
 
 @mcp.tool()
