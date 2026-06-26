@@ -24,6 +24,7 @@ from typing import Any, Optional
 import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 load_dotenv()
 
@@ -41,7 +42,22 @@ PORT = int(os.getenv("PORT", "8000"))
 DATA_DIR = os.getenv("LINK_FINDER_DATA_DIR", "data").strip()
 HTTP_TIMEOUT = float(os.getenv("LINK_FINDER_HTTP_TIMEOUT", "120"))
 
-mcp = FastMCP("Link Finder MCP")
+# Behind a PaaS/proxy (Render, Railway, Fly, ...) the public Host header won't
+# be localhost, which trips FastMCP's DNS-rebinding protection (HTTP 421). The
+# endpoint is already protected by MCP_BEARER_TOKEN, so we disable host
+# checking by default and let users opt back in with an explicit allowlist.
+_allowed_hosts = [h.strip() for h in os.getenv("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+_allowed_origins = [o.strip() for o in os.getenv("MCP_ALLOWED_ORIGINS", "").split(",") if o.strip()]
+if _allowed_hosts or _allowed_origins:
+    _transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_allowed_hosts or ["*"],
+        allowed_origins=_allowed_origins or ["*"],
+    )
+else:
+    _transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+mcp = FastMCP("Link Finder MCP", transport_security=_transport_security)
 
 
 # --------------------------------------------------------------------------- #

@@ -76,6 +76,8 @@ All configuration is via environment variables:
 | `LINK_FINDER_DATA_DIR` | no | `data` | Where results + history are saved (empty = disable) |
 | `LINK_FINDER_BASE_URL` | no | `https://app.link-finder.net/api/v2` | Override the API base URL |
 | `LINK_FINDER_HTTP_TIMEOUT` | no | `120` | HTTP timeout in seconds |
+| `MCP_ALLOWED_HOSTS` | no | _(empty)_ | Comma-separated Host allowlist for DNS-rebinding protection. Empty = disabled (works behind any proxy). Supports a `:*` port wildcard. |
+| `MCP_ALLOWED_ORIGINS` | no | _(empty)_ | Comma-separated Origin allowlist (used with the above). |
 
 ---
 
@@ -220,6 +222,11 @@ services:
 The same works on any VM / PaaS — just set the env vars and run `python -m link_finder_mcp.server`. Use `MCP_TRANSPORT=http` instead of `sse` for the Streamable HTTP transport.
 
 > **Note on saved data:** on ephemeral hosts (like Render's default disk) the `data/` folder is not persistent. Mount a persistent disk, or set `LINK_FINDER_DATA_DIR` to a mounted path, if you want the search history to survive restarts. Local (stdio) usage persists normally.
+
+### Troubleshooting
+
+- **`SSE error: Non-200 status code (421)` / `Invalid Host header`** — this is DNS-rebinding protection rejecting the proxy's public hostname. The server disables host checking by default (the bearer token already guards it), so a fresh deploy works out of the box. If you set `MCP_ALLOWED_HOSTS`, make sure it includes your public host, e.g. `your-app.onrender.com`.
+- **`GET / → 404` / `POST /sse → 405` in the logs** — harmless. The SSE transport serves a stream on `GET /sse` and accepts messages on `POST /messages/`; probes hitting other paths/methods are expected. Point your client at the `/sse` path.
 
 ---
 
