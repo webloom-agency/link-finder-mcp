@@ -64,7 +64,30 @@ if _allowed_hosts or _allowed_origins:
 else:
     _transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
-mcp = FastMCP("Link Finder MCP", transport_security=_transport_security)
+
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Streamable HTTP is the robust transport behind PaaS proxies (Render, etc.):
+# unlike SSE, it doesn't keep the session glued to a single long-lived stream
+# that proxies love to buffer/reset. Running it stateless (default) sidesteps
+# the "request before initialization complete" handshake failures entirely.
+STATELESS_HTTP = _env_bool("MCP_STATELESS_HTTP", True)
+# Keep SSE-framed responses by default — every Streamable HTTP client accepts
+# them, whereas plain-JSON responses (json_response=True) are an optimization
+# some clients reject. Opt in with MCP_JSON_RESPONSE=true only if needed.
+JSON_RESPONSE = _env_bool("MCP_JSON_RESPONSE", False)
+
+mcp = FastMCP(
+    "Link Finder MCP",
+    transport_security=_transport_security,
+    stateless_http=STATELESS_HTTP,
+    json_response=JSON_RESPONSE,
+)
 
 
 # --------------------------------------------------------------------------- #

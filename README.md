@@ -69,15 +69,23 @@ All configuration is via environment variables:
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `LINK_FINDER_API_KEY` | yes | — | Your Link Finder API key |
-| `MCP_TRANSPORT` | no | `stdio` | `stdio` (local), `sse` or `http` (hosted) |
+| `MCP_TRANSPORT` | no | `stdio` | `stdio` (local), `http` (Streamable HTTP, recommended for hosting), or `sse` (legacy) |
 | `MCP_BEARER_TOKEN` | hosted only | — | Shared secret clients send as `Authorization: Bearer <token>` |
 | `PORT` | no | `8000` | Port to bind in hosted mode (Render/Railway/Fly inject this) |
 | `HOST` | no | `0.0.0.0` | Bind address in hosted mode |
+| `MCP_STATELESS_HTTP` | no | `true` | Streamable HTTP only. Stateless = no per-session server state; robust behind proxies/load balancers |
+| `MCP_JSON_RESPONSE` | no | `false` | Streamable HTTP only. `true` returns plain JSON instead of SSE-framed responses (only if your client requires it) |
 | `LINK_FINDER_DATA_DIR` | no | `data` | Where results + history are saved (empty = disable) |
 | `LINK_FINDER_BASE_URL` | no | `https://app.link-finder.net/api/v2` | Override the API base URL |
 | `LINK_FINDER_HTTP_TIMEOUT` | no | `120` | HTTP timeout in seconds |
 | `MCP_ALLOWED_HOSTS` | no | _(empty)_ | Comma-separated Host allowlist for DNS-rebinding protection. Empty = disabled (works behind any proxy). Supports a `:*` port wildcard. |
 | `MCP_ALLOWED_ORIGINS` | no | _(empty)_ | Comma-separated Origin allowlist (used with the above). |
+
+### Which transport?
+
+- **Local clients (Claude Desktop, Cursor, ...)** → `stdio`.
+- **Hosted (Render or any VM)** → `http` (**Streamable HTTP**). This is the recommended, proxy-friendly transport; the endpoint lives at **`/mcp`**.
+- `sse` is the older transport (endpoint at `/sse`). It works, but long-lived SSE streams can be buffered or reset by PaaS proxies, which can stall the MCP initialization handshake. Prefer `http` unless your client only speaks SSE.
 
 ---
 
@@ -136,9 +144,9 @@ ChatGPT supports remote MCP servers (Developer mode / custom connectors and the 
 
 ### Option A — ChatGPT Developer Mode / Connectors (UI)
 
-1. Deploy the server (e.g. on Render) with `MCP_TRANSPORT=sse` and a strong `MCP_BEARER_TOKEN`.
+1. Deploy the server (e.g. on Render) with `MCP_TRANSPORT=http` and a strong `MCP_BEARER_TOKEN`.
 2. In ChatGPT: **Settings → Connectors → Advanced → Developer mode**, then **Create** a connector.
-3. Set the server URL to your deployment's SSE endpoint, e.g. `https://your-app.onrender.com/sse`.
+3. Set the server URL to your deployment's MCP endpoint, e.g. `https://your-app.onrender.com/mcp`.
 4. Add an `Authorization` header: `Bearer <your MCP_BEARER_TOKEN>`.
 5. Save, then enable the connector in a chat and ask it to find backlinks.
 
@@ -155,7 +163,7 @@ resp = client.responses.create(
         {
             "type": "mcp",
             "server_label": "link-finder",
-            "server_url": "https://your-app.onrender.com/sse",
+            "server_url": "https://your-app.onrender.com/mcp",
             "headers": {"Authorization": "Bearer YOUR_MCP_BEARER_TOKEN"},
             "require_approval": "never",
         }
@@ -192,7 +200,7 @@ Add to `~/.cursor/mcp.json` (or the project `.cursor/mcp.json`):
 
 ## Deploy on Render (or any VM)
 
-The server is host-agnostic. In hosted mode it binds `0.0.0.0:$PORT` and protects the MCP endpoints with a bearer token.
+The server is host-agnostic. In hosted mode it binds `0.0.0.0:$PORT` and protects the MCP endpoints with a bearer token. The recommended hosted transport is **Streamable HTTP** (`MCP_TRANSPORT=http`), served at **`/mcp`**.
 
 A ready-made [`render.yaml`](./render.yaml) is included:
 
@@ -207,7 +215,7 @@ services:
       - key: PYTHONPATH
         value: src
       - key: MCP_TRANSPORT
-        value: sse
+        value: http
       - key: LINK_FINDER_API_KEY
         sync: false
       - key: MCP_BEARER_TOKEN
@@ -217,16 +225,26 @@ services:
 1. Push this repo to GitHub.
 2. In Render: **New → Blueprint**, point it at the repo.
 3. Set the two secret env vars (`LINK_FINDER_API_KEY`, `MCP_BEARER_TOKEN`) in the dashboard.
-4. Deploy. Your SSE endpoint will be `https://<service>.onrender.com/sse`.
+4. Deploy. Your MCP endpoint will be `https://<service>.onrender.com/mcp`.
 
-The same works on any VM / PaaS — just set the env vars and run `python -m link_finder_mcp.server`. Use `MCP_TRANSPORT=http` instead of `sse` for the Streamable HTTP transport.
+The same works on any VM / PaaS — just set the env vars and run `python -m link_finder_mcp.server`. Set `MCP_TRANSPORT=sse` (endpoint `/sse`) only if your client requires the legacy SSE transport.
+
+Point your client at the `/mcp` endpoint with the bearer token:
+
+```json
+{
+  "url": "https://your-app.onrender.com/mcp",
+  "headers": { "Authorization": "Bearer YOUR_MCP_BEARER_TOKEN" }
+}
+```
 
 > **Note on saved data:** on ephemeral hosts (like Render's default disk) the `data/` folder is not persistent. Mount a persistent disk, or set `LINK_FINDER_DATA_DIR` to a mounted path, if you want the search history to survive restarts. Local (stdio) usage persists normally.
 
 ### Troubleshooting
 
+- **`Failed to validate request: Received request before initialization was complete`** (repeating, on SSE) — the MCP `initialize` handshake is stalling. With the legacy SSE transport the `initialize` response travels back over the long-lived `GET /sse` stream, and PaaS proxies (Render included) often buffer or reset that stream so it never reaches the client. **Fix:** use `MCP_TRANSPORT=http` (Streamable HTTP, endpoint `/mcp`), which doesn't depend on a persistent stream and runs stateless by default.
 - **`SSE error: Non-200 status code (421)` / `Invalid Host header`** — this is DNS-rebinding protection rejecting the proxy's public hostname. The server disables host checking by default (the bearer token already guards it), so a fresh deploy works out of the box. If you set `MCP_ALLOWED_HOSTS`, make sure it includes your public host, e.g. `your-app.onrender.com`.
-- **`GET / → 404` / `POST /sse → 405` in the logs** — harmless. The SSE transport serves a stream on `GET /sse` and accepts messages on `POST /messages/`; probes hitting other paths/methods are expected. Point your client at the `/sse` path.
+- **`GET / → 404` / `POST <path> → 405` in the logs** — harmless. Each transport serves on its own path (`/mcp` for Streamable HTTP, `/sse` + `/messages/` for SSE); probes hitting other paths/methods are expected. Point your client at the right path for your transport.
 
 ---
 

@@ -8,7 +8,7 @@ services:
       - key: PYTHONPATH
         value: src
       - key: MCP_TRANSPORT
-        value: sse
+        value: http
       - key: LINK_FINDER_API_KEY
         sync: false
       - key: MCP_BEARER_TOKEN
