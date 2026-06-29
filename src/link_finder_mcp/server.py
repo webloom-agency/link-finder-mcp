@@ -769,6 +769,8 @@ def backlink_workflow() -> str:
 # --------------------------------------------------------------------------- #
 def _build_hosted_app(transport: str):
     """Build a Starlette app guarded by a bearer-token middleware."""
+    import hmac
+
     from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.requests import Request
     from starlette.responses import JSONResponse
@@ -785,15 +787,13 @@ def _build_hosted_app(transport: str):
         async def dispatch(self, request: Request, call_next):
             if request.url.path.startswith(protected_prefixes):
                 auth_header = request.headers.get("Authorization", "")
-                if not auth_header.startswith("Bearer "):
+                presented = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+                # Constant-time compare to avoid leaking the token via timing,
+                # and always compare so a missing header costs the same.
+                if not hmac.compare_digest(presented, MCP_BEARER_TOKEN):
                     return JSONResponse(
                         status_code=401,
-                        content={"error": "Missing or malformed Authorization header. "
-                                          "Expected 'Bearer <token>'."},
-                    )
-                if auth_header[7:] != MCP_BEARER_TOKEN:
-                    return JSONResponse(
-                        status_code=401, content={"error": "Invalid bearer token"}
+                        content={"error": "Unauthorized. Send 'Authorization: Bearer <token>'."},
                     )
             return await call_next(request)
 

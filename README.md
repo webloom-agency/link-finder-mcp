@@ -1,5 +1,7 @@
 # Link Finder MCP
 
+*🇫🇷 [Version française](./README.fr.md)*
+
 An [MCP](https://modelcontextprotocol.io) server for the [Link Finder API](https://app.link-finder.net) — find backlink opportunities, analyze competitors, discover similar domains with AI embeddings, and manage prospecting projects directly from Claude, ChatGPT, Cursor, or any MCP client.
 
 Secrets are provided only through environment variables, and the server is host-agnostic: run it locally over stdio, or deploy it anywhere (Render or any VM) with a bearer-token-protected HTTP/SSE endpoint.
@@ -89,6 +91,21 @@ All configuration is via environment variables:
 
 ---
 
+## Connect it to your AI chat — pick your setup
+
+There are two ways to use this server. Choose based on your chat app:
+
+| | **A. Local (on your computer)** | **B. Hosted (online URL)** |
+| --- | --- | --- |
+| **Best for** | Claude Desktop, Cursor, Cline, and other desktop apps | ChatGPT, Claude (web), or any chat that connects to a remote MCP URL |
+| **How it runs** | The chat app launches the server for you | You deploy once (e.g. Render), then paste a URL + token |
+| **Transport** | `stdio` | `http` (Streamable HTTP) at `/mcp` |
+| **Setup** | [Claude Desktop](#a-use-with-claude-desktop-local) · [Cursor](#a-use-with-cursor-local) | [Deploy](#deploy-on-render-or-any-vm) then [ChatGPT](#b-use-with-chatgpt-hosted) · [any client](#b-use-with-any-other-ai-chat--mcp-client-hosted) |
+
+> Rule of thumb: **desktop app → A (local)**, **web/cloud chat → B (hosted)**.
+
+---
+
 ## Running locally (stdio)
 
 ```bash
@@ -104,7 +121,7 @@ PYTHONPATH=src mcp dev src/link_finder_mcp/server.py
 
 ---
 
-## Use with Claude Desktop
+## A. Use with Claude Desktop (local)
 
 Edit your Claude config:
 
@@ -138,9 +155,9 @@ Claude will chain `get_account` → `keyword_search` → `create_project` → `a
 
 ---
 
-## Use with ChatGPT
+## B. Use with ChatGPT (hosted)
 
-ChatGPT supports remote MCP servers (Developer mode / custom connectors and the Responses API `tools` of type `mcp`). For that you need the server reachable over HTTPS with a bearer token — see [Deploy on Render](#deploy-on-render-or-any-vm).
+ChatGPT supports remote MCP servers (Developer mode / custom connectors and the Responses API `tools` of type `mcp`). For that you need the server reachable over HTTPS with a bearer token — see [Deploy on Render](#deploy-on-render-or-any-vm) first.
 
 ### Option A — ChatGPT Developer Mode / Connectors (UI)
 
@@ -177,7 +194,7 @@ print(resp.output_text)
 
 ---
 
-## Use with Cursor
+## A. Use with Cursor (local)
 
 Add to `~/.cursor/mcp.json` (or the project `.cursor/mcp.json`):
 
@@ -195,6 +212,24 @@ Add to `~/.cursor/mcp.json` (or the project `.cursor/mcp.json`):
   }
 }
 ```
+
+---
+
+## B. Use with any other AI chat / MCP client (hosted)
+
+Most other clients (Claude on the web, n8n, custom apps, MCP SDKs, ...) connect to a remote MCP server the same way: a **URL** + a **bearer token**. After you [deploy](#deploy-on-render-or-any-vm):
+
+```json
+{
+  "url": "https://your-app.onrender.com/mcp",
+  "headers": { "Authorization": "Bearer YOUR_MCP_BEARER_TOKEN" }
+}
+```
+
+- **URL** → your deployment + `/mcp` (Streamable HTTP). Use `/sse` only if your client speaks the legacy SSE transport.
+- **Token** → the exact value you set in `MCP_BEARER_TOKEN`.
+
+That's all any compliant MCP client needs. Once connected, just ask in plain language (e.g. *"find backlink opportunities for my coffee blog in France"*) and the model will call the right tools.
 
 ---
 
